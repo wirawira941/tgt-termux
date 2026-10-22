@@ -38,7 +38,7 @@ jobs:
       - name: Install host build tools (gperf for TDLib)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gperf
+          sudo apt-get install -y -qq gperf libssl-dev zlib1g-dev
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -64,8 +64,8 @@ jobs:
 
       - name: Package
         run: |
-          cd dist
-          cp "$GITHUB_WORKSPACE/port/termux/install-tgt-termux.sh" .
+          cd "${{ github.workspace }}/dist"
+          cp "${{ github.workspace }}/port/termux/install-tgt-termux.sh" .
           chmod +x tgt install-tgt-termux.sh
           chmod 755 libtdjson.so
           zip -9 tgt-termux-android-aarch64.zip tgt libtdjson.so install-tgt-termux.sh
@@ -75,12 +75,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tgt-termux-android-aarch64
-          path: dist/tgt-termux-android-aarch64.zip
-          retention-days: 90
+          path: ${{ github.workspace }}/dist/tgt-termux-android-aarch64.zip
+          if-no-files-found: error
 
       - name: Publish release
         if: inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          files: dist/tgt-termux-android-aarch64.zip
+          name: tgt for Termux (Android aarch64) ${{ inputs.release_tag }}
+          files: ${{ github.workspace }}/dist/tgt-termux-android-aarch64.zip
