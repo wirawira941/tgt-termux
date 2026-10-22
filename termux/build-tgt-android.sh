@@ -69,6 +69,14 @@ echo "== [4/5] pkg-config sysroot env"
 export PKG_CONFIG_ALLOW_CROSS=1
 export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
 export PKG_CONFIG_PATH="$TERMUX_USR/lib/pkgconfig"
+
+# TDLib version note (run #3): tdlib-rs at the pinned main commit demands
+# tdjson >= 1.8.61 via system-deps, but Termux packages libtd 1.8.50.
+# The td_json_client C API is stable across 1.8.x, so we satisfy the probe
+# by reporting the required version in the sysroot's tdjson.pc.
+# If the final link ever fails on missing symbols, revisit this first.
+sed -i 's/^Version: .*/Version: 1.8.61/' "$PKG_CONFIG_PATH/tdjson.pc"
+grep '^Version:' "$PKG_CONFIG_PATH/tdjson.pc"
 # Fallback feature path (FEATURES=local-tdlib)
 export LOCAL_TDLIB_PATH="$TERMUX_USR"
 pkg-config --modversion tdjson
