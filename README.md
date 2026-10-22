@@ -4,22 +4,24 @@ Unofficial Termux port of [tgt](https://github.com/FedericoBruzzone/tgt) — a t
 
 ## How it works
 
-- Termux already ships TDLib as the **`libtd`** package (1.8.50), so no TDLib compilation is needed.
-- `tgt` is cross-compiled in GitHub Actions for `aarch64-linux-android` (NDK r28c) using its own **`pkg-config`** feature, linking dynamically against Termux's `libtdjson.so`. The Termux `.deb` is extracted as a sysroot during the build.
-- v1 trims upstream's default extras: no `download-tdlib` (glibc prebuilds don't run on Android), no voice-message/rodio audio yet.
+- tgt's bindings (`tdlib-rs` 1.4.0) are generated from the **TDLib 1.8.61** TL scheme. Termux's `libtd` package is only 1.8.50 — new enough to *link*, too old to *talk to*: its replies omit fields the 1.8.61 types require, and the .1 release panicked at startup because of that.
+- So CI builds the real **TDLib 1.8.61 from source** (`tdlib/td` at the exact commit tdlib-rs targets), cross-compiled with the Android NDK against Termux's OpenSSL/zlib packages, and the release **bundles the resulting `libtdjson.so`**.
+- `tgt` (upstream main) is cross-compiled for `aarch64-linux-android` using its `pkg-config` feature against that TDLib — `tdjson.pc` reports the true version 1.8.61, no version faking anywhere on the runtime path.
+- Extras trimmed: no `download-tdlib` (glibc prebuilds don't run on Android), no voice-message/rodio audio yet.
 
 ## Install (on the phone)
 
-Download `tgt-termux-android-aarch64.zip` from the Releases page, unzip, then in Termux:
+In Termux:
 
 ```sh
+curl -LO https://raw.githubusercontent.com/wirawira941/tgt-termux/main/termux/install-tgt-termux.sh
 bash install-tgt-termux.sh
 ```
 
-The installer runs `pkg install libtd`, installs the `tgt` binary into `$PREFIX/bin`, and smoke-tests `tgt --help`.
+The installer installs the runtime dependencies (`openssl`, `zlib`, `libc++`), puts the `tgt` binary in `$PREFIX/bin` and the bundled TDLib in `$PREFIX/lib/tgt/` (found first via the binary's RUNPATH, so it never clashes with Termux's own `libtd`), smoke-tests `tgt --help`, and seeds the default config with `tgt init-config`.
 
-First run: get an **API ID / API hash** from https://my.telegram.org, then run `tgt` and follow the login prompts. Config: `~/.config/tgt`.
+First run: get an **API ID / API hash** from https://my.telegram.org, put them into `~/.config/tgt/telegram.toml`, then run `tgt` and follow the login prompts.
 
 ## Build
 
-Trigger the `build-termux` workflow (Actions tab → Run workflow). Set `release_tag` (e.g. `v1.0.0-termux.1`) to also publish a Release. Build logic lives in `termux/build-tgt-android.sh`.
+Trigger the `build-termux` workflow (Actions tab → Run workflow). Set `release_tag` (e.g. `v1.0.0-termux.3`) to also publish a Release. Build logic lives in `termux/build-tgt-android.sh`. TDLib is the long pole (~tens of minutes); its build is cached in CI per TDLib commit.

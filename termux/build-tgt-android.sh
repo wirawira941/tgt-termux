@@ -1,50 +1,136 @@
 #!/usr/bin/env bash
-# Build tgt (Telegram TUI) for Termux / Android aarch64.
+# Build tgt (Telegram TUI) for Termux / Android aarch64 — "jalur normal":
+# build the REAL TDLib 1.8.61 from source and bundle its libtdjson.so.
 #
-# Strategy: cross-compile with the Android NDK, linking dynamically against
-# Termux's own TDLib package (libtd) through tgt's `pkg-config` feature.
-# The libtd .deb is downloaded from the Termux repo and extracted as a
-# sysroot; at runtime the phone resolves libtdjson.so from `pkg install libtd`.
+# Why: tdlib-rs 1.4.0 (used by upstream tgt main) is generated from the
+# TDLib 1.8.61 TL scheme. Termux's libtd package is only 1.8.50, whose
+# replies omit fields the 1.8.61 types require (e.g. collectible_usernames)
+# -> tgt panicked at runtime. Faking the version in tdjson.pc satisfied
+# the linker but not the data scheme. So this pipeline builds TDLib
+# itself, at the exact commit tdlib-rs 1.4.0 targets, and ships it next
+# to tgt. The tdjson.pc then reports the TRUE version 1.8.61.
+#
+# Layout on the phone (see install-tgt-termux.sh):
+#   $PREFIX/bin/tgt                      (RUNPATH: $PREFIX/lib/tgt first)
+#   $PREFIX/lib/tgt/libtdjson.so         (bundled 1.8.61, wins over any
+#                                         Termux libtd in $PREFIX/lib)
+#   runtime deps from pkg: openssl, zlib, libc++
 #
 # Env inputs:
-#   TGT_REF        upstream commit to build       (default: v1.0.0 tag)
-#                  PIN RATIONALE (revised after the .1 on-device panic):
-#                  tdlib-rs' generated types must not be NEWER than the
-#                  runtime TDLib. tdlib-rs 1.3.0/1.4.0 (upstream main) are
-#                  generated from the TDLib 1.8.61 scheme; Termux ships
-#                  TDLib 1.8.50, whose replies omit newer required fields
-#                  (e.g. `collectible_usernames`) -> tgt panicked at
-#                  runtime deserializing them. The v1.0.0 tag uses
-#                  tdlib-rs 1.0.5 (TDLib 1.8.29 scheme <= 1.8.50 runtime:
-#                  the safe direction — unknown newer fields are ignored).
-#                  The tag's only Android blocker is its unconditional
-#                  arboard dep (no Android backend); termux/patches/
-#                  0001-android-termux-clipboard.patch target-gates it
-#                  out and routes copy/paste through Termux:API instead.
-#   LIBTD_DEB_URL  pinned Termux libtd .deb URL   (default: libtd 1.8.50-1)
-#   ANDROID_NDK_HOME / NDK_HOME                   (required)
-#   API_LEVEL      Android API level for clang    (default: 24)
-#   FEATURES       cargo features                 (default: pkg-config)
-#                  Fallback if system-deps/pkg-config misbehaves:
-#                  FEATURES=local-tdlib (uses LOCAL_TDLIB_PATH=$SYSROOT)
+#   TD_REF           tdlib/td commit       (default: 1.8.61 commit)
+#   TGT_REF          upstream tgt commit   (default: main @ 6b2abb9)
+#   ANDROID_NDK_HOME / NDK_HOME            (required)
+#   API_LEVEL        Android API level     (default: 24)
+#   JOBS             parallel build jobs   (default: nproc)
 set -euo pipefail
 
-TGT_REF="${TGT_REF:-9ae9cb6c5788976b8db9e797045b90ffb1ee6d1e}"
-LIBTD_DEB_URL="${LIBTD_DEB_URL:-https://packages-cf.termux.dev/apt/termux-main/pool/main/libt/libtd/libtd_1.8.50-1_aarch64.deb}"
+TD_REF="${TD_REF:-11e254af695060d8890024dd7faa1cc2d6685ef8}"
+TD_VERSION="1.8.61"
+TGT_REF="${TGT_REF:-6b2abb9354515023d3a90853f7d4cc95ba00ce6e}"
+OPENSSL_DEB_URL="${OPENSSL_DEB_URL:-https://packages-cf.termux.dev/apt/termux-main/pool/main/o/openssl/openssl_1%3A3.6.5_aarch64.deb}"
+ZLIB_DEB_URL="${ZLIB_DEB_URL:-https://packages-cf.termux.dev/apt/termux-main/pool/main/z/zlib/zlib_1.3.2_aarch64.deb}"
 HOST_LIBTD_DEB_URL="${HOST_LIBTD_DEB_URL:-https://packages-cf.termux.dev/apt/termux-main/pool/main/libt/libtd/libtd_1.8.50-1_x86_64.deb}"
 API_LEVEL="${API_LEVEL:-24}"
 FEATURES="${FEATURES:-pkg-config}"
+JOBS="${JOBS:-$(nproc)}"
 NDK="${ANDROID_NDK_HOME:-${NDK_HOME:-}}"
 [ -n "$NDK" ] || { echo "ERROR: ANDROID_NDK_HOME/NDK_HOME not set"; exit 1; }
+command -v gperf >/dev/null || { echo "ERROR: gperf missing (needed by TDLib's TL parser build)"; exit 1; }
 
 WORK="${WORK:-$HOME/tgt-build}"
-SYSROOT="$WORK/termux-sysroot"          # .deb extracts ./data/data/... under here
-HOST_SYSROOT="$WORK/host-sysroot"      # x86_64 libtd for the HOST build script link
+TD_SRC="$WORK/td"
+TD_BUILD="$WORK/td-build-android"
+TD_INSTALL="$WORK/td-install"
+DEPS_SYSROOT="$WORK/deps-sysroot"        # Termux openssl+zlib (aarch64)
+DEPS_USR="$DEPS_SYSROOT/data/data/com.termux/files/usr"
+SYSROOT="$WORK/termux-sysroot"          # tgt-stage sysroot (our TDLib)
 TERMUX_USR="$SYSROOT/data/data/com.termux/files/usr"
+HOST_SYSROOT="$WORK/host-sysroot"       # x86_64 libtd for the HOST build-script link
+HOST_TERMUX_USR="$HOST_SYSROOT/data/data/com.termux/files/usr"
 DIST="${DIST:-$WORK/dist}"
+TERMUX_PREFIX="/data/data/com.termux/files/usr"
 mkdir -p "$WORK" "$DIST"
 
-echo "== [1/5] Clone tgt @ $TGT_REF"
+extract_deb() { # $1=deb file, $2=dest dir
+  if command -v dpkg-deb >/dev/null; then
+    dpkg-deb -x "$1" "$2"
+  else
+    (cd "$2" && ar x "$1" && tar -xf data.tar.* && rm -f data.tar.* debian-binary control.tar.*)
+  fi
+}
+
+echo "== [1/6] Clone td (TDLib) @ $TD_REF"
+if [ ! -d "$TD_SRC/.git" ]; then
+  mkdir -p "$TD_SRC"
+  git -C "$TD_SRC" init -q
+  git -C "$TD_SRC" remote add origin https://github.com/tdlib/td.git
+  git -C "$TD_SRC" fetch -q --depth 1 origin "$TD_REF"
+  git -C "$TD_SRC" checkout -q FETCH_HEAD
+fi
+git -C "$TD_SRC" rev-parse HEAD
+grep -m1 "project(TDLib" "$TD_SRC/CMakeLists.txt"
+
+echo "== [2/6] Fetch Termux openssl + zlib (TDLib target deps)"
+if [ ! -f "$DEPS_USR/lib/libssl.so" ]; then
+  mkdir -p "$DEPS_SYSROOT"
+  curl -sL -o "$WORK/openssl.deb" "$OPENSSL_DEB_URL"
+  curl -sL -o "$WORK/zlib.deb" "$ZLIB_DEB_URL"
+  extract_deb "$WORK/openssl.deb" "$DEPS_SYSROOT"
+  extract_deb "$WORK/zlib.deb" "$DEPS_SYSROOT"
+fi
+ls -la "$DEPS_USR/lib/libssl.so" "$DEPS_USR/lib/libz.so" "$DEPS_USR/include/openssl/ssl.h"
+
+echo "== [3/6] Build TDLib $TD_VERSION for aarch64 (target: tdjson)"
+if [ ! -f "$TD_INSTALL/lib/libtdjson.so" ]; then
+  cmake -S "$TD_SRC" -B "$TD_BUILD" \
+    -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${API_LEVEL}" \
+    -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_LTO=OFF \
+    -DCMAKE_INSTALL_PREFIX="$TD_INSTALL" \
+    -DCMAKE_INSTALL_RPATH="$TERMUX_PREFIX/lib" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+    -DOPENSSL_ROOT_DIR="$DEPS_USR" -DOPENSSL_INCLUDE_DIR="$DEPS_USR/include" \
+    -DOPENSSL_SSL_LIBRARY="$DEPS_USR/lib/libssl.so" -DOPENSSL_CRYPTO_LIBRARY="$DEPS_USR/lib/libcrypto.so" \
+    -DZLIB_INCLUDE_DIR="$DEPS_USR/include" -DZLIB_LIBRARY="$DEPS_USR/lib/libz.so"
+  cmake --build "$TD_BUILD" --target tdjson -j "$JOBS"
+  cmake --install "$TD_BUILD"
+fi
+ls -la "$TD_INSTALL/lib/libtdjson.so" "$TD_INSTALL/include/td/telegram/td_json_client.h"
+readelf -d "$TD_INSTALL/lib/libtdjson.so" | grep NEEDED || true
+
+echo "== [4/6] Assemble tgt sysroot (REAL tdjson $TD_VERSION) + host sysroot"
+mkdir -p "$TERMUX_USR/lib/pkgconfig"
+cp -a "$TD_INSTALL/include" "$TERMUX_USR/"
+cp -a "$TD_INSTALL/lib/libtdjson.so" "$TERMUX_USR/lib/"
+cat > "$TERMUX_USR/lib/pkgconfig/tdjson.pc" <<EOF
+prefix=$TERMUX_PREFIX
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: tdjson
+Description: Telegram Database library (JSON interface), built from source
+Version: $TD_VERSION
+Libs: -L\${libdir} -ltdjson
+Cflags: -I\${includedir}
+EOF
+cat "$TERMUX_USR/lib/pkgconfig/tdjson.pc"
+
+# Host sysroot (link-time stand-in ONLY): cargo also builds tdlib-rs for
+# the HOST (build-dependency of tgt's build script), and that link must
+# resolve -ltdjson against an x86_64 library. The host build script never
+# talks to Telegram, so Termux's x86_64 libtd is a safe stand-in; its .pc
+# reports 1.8.61 only to satisfy the version probe of that host link.
+# The phone's RUNTIME library is the real 1.8.61 built above — no version
+# is faked anywhere on the data path.
+if [ ! -f "$HOST_TERMUX_USR/lib/libtdjson.so" ]; then
+  mkdir -p "$HOST_SYSROOT"
+  curl -sL -o "$WORK/libtd-host.deb" "$HOST_LIBTD_DEB_URL"
+  extract_deb "$WORK/libtd-host.deb" "$HOST_SYSROOT"
+fi
+sed -i 's/^Version: .*/Version: 1.8.61/' "$HOST_TERMUX_USR/lib/pkgconfig/tdjson.pc"
+grep '^Version:' "$HOST_TERMUX_USR/lib/pkgconfig/tdjson.pc"
+
+echo "== [5/6] Clone tgt @ $TGT_REF"
 if [ ! -d "$WORK/tgt/.git" ]; then
   mkdir -p "$WORK/tgt"
   git -C "$WORK/tgt" init -q
@@ -54,93 +140,34 @@ if [ ! -d "$WORK/tgt/.git" ]; then
 fi
 git -C "$WORK/tgt" rev-parse HEAD
 
-# Android clipboard patch (see header): gate arboard out on Android and
-# route copy/paste through Termux:API (termux-clipboard-set/get).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLIP_PATCH="$SCRIPT_DIR/patches/0001-android-termux-clipboard.patch"
-if git -C "$WORK/tgt" apply --check "$CLIP_PATCH" 2>/dev/null; then
-  git -C "$WORK/tgt" apply "$CLIP_PATCH"
-  echo "Applied Android clipboard patch"
-else
-  echo "Clipboard patch already applied (or tree dirty); continuing"
-fi
-grep -n "termux_clipboard_set" "$WORK/tgt/src/components/chat_window.rs" | head -2
-
-echo "== [2/5] Fetch Termux libtd (sysroot)"
-if [ ! -f "$TERMUX_USR/lib/libtdjson.so" ]; then
-  mkdir -p "$SYSROOT"
-  curl -sL -o "$WORK/libtd.deb" "$LIBTD_DEB_URL"
-  # .deb is an ar archive; dpkg-deb may not exist on the runner
-  if command -v dpkg-deb >/dev/null; then
-    dpkg-deb -x "$WORK/libtd.deb" "$SYSROOT"
-  else
-    (cd "$SYSROOT" && ar x "$WORK/libtd.deb" && tar -xf data.tar.* && rm -f data.tar.* debian-binary control.tar.*)
-  fi
-fi
-ls -la "$TERMUX_USR/lib/libtdjson.so" "$TERMUX_USR/lib/pkgconfig/tdjson.pc"
-
-# Host sysroot (run #4): tgt's own build.rs is compiled+linked for the HOST
-# (x86_64). Cargo therefore runs tdlib-rs' pkg-config probe for the host
-# too, and the host link must resolve -ltdjson against an x86_64 library.
-# Termux's x86_64 libtd .deb provides exactly that.
-HOST_TERMUX_USR="$HOST_SYSROOT/data/data/com.termux/files/usr"
-if [ ! -f "$HOST_TERMUX_USR/lib/libtdjson.so" ]; then
-  mkdir -p "$HOST_SYSROOT"
-  curl -sL -o "$WORK/libtd-host.deb" "$HOST_LIBTD_DEB_URL"
-  if command -v dpkg-deb >/dev/null; then
-    dpkg-deb -x "$WORK/libtd-host.deb" "$HOST_SYSROOT"
-  else
-    (cd "$HOST_SYSROOT" && ar x "$WORK/libtd-host.deb" && tar -xf data.tar.* && rm -f data.tar.* debian-binary control.tar.*)
-  fi
-fi
-ls -la "$HOST_TERMUX_USR/lib/libtdjson.so" "$HOST_TERMUX_USR/lib/pkgconfig/tdjson.pc"
-
-echo "== [3/5] Toolchain env (NDK: $NDK)"
+echo "== [6/6] cargo build tgt (features: $FEATURES)"
 NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$NDK_BIN/llvm-ar"
 export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang"
 export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang++"
 export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
-
-echo "== [4/5] pkg-config sysroot env"
-# Run #4 lesson: pkg-config env must be TARGET-scoped, never global.
-# The host (x86_64) build script's probe otherwise resolves -ltdjson
-# against the aarch64 sysroot and the host link dies on the wrong-arch .so.
-# (pkg-config crate honours PKG_CONFIG_PATH_<target> over the plain var.)
+# pkg-config env is TARGET-scoped, never global (run #4 lesson), in the
+# underscore form bash can export (run #5 lesson).
 export PKG_CONFIG_ALLOW_CROSS=1
 export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
 export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
-# (Underscore variant: bash cannot export names containing dashes, and the
-# pkg-config crate accepts PKG_CONFIG_PATH_<target_with_underscores> as an
-# equivalent form — run #5 died on exactly that bash identifier rule.)
 export PKG_CONFIG_PATH_aarch64_linux_android="$TERMUX_USR/lib/pkgconfig"
 export PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android="$SYSROOT"
 export PKG_CONFIG_PATH_x86_64_unknown_linux_gnu="$HOST_TERMUX_USR/lib/pkgconfig"
 export PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu="$HOST_SYSROOT"
-
-# TDLib version note: tdlib-rs 1.0.5 (v1.0.0 tag) probes tdjson >= 1.8.29,
-# which Termux's real 1.8.50 satisfies — NO version faking. (The .1 build
-# faked 1.8.61 for main's tdlib-rs 1.4.0; the C API linked fine, but its
-# 1.8.61-scheme types panicked at runtime against the 1.8.50 library.
-# Never fake the .pc version again; match the scheme instead.)
-grep '^Version:' "$TERMUX_USR/lib/pkgconfig/tdjson.pc" "$HOST_TERMUX_USR/lib/pkgconfig/tdjson.pc"
-# Fallback feature path (FEATURES=local-tdlib)
-export LOCAL_TDLIB_PATH="$TERMUX_USR"
 PKG_CONFIG_PATH="$TERMUX_USR/lib/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$SYSROOT" pkg-config --modversion tdjson
-PKG_CONFIG_PATH="$TERMUX_USR/lib/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$SYSROOT" pkg-config --cflags --libs tdjson
 
-echo "== [5/5] cargo build (features: $FEATURES)"
 cd "$WORK/tgt"
-# Runtime lookup: Termux keeps its libs in $PREFIX/lib; embed that rpath.
-export RUSTFLAGS="-C link-arg=-Wl,-rpath,/data/data/com.termux/files/usr/lib"
-# NOTE: no --locked — the v1.0.0 tag's Cargo.lock does not cover this
-# feature set, so cargo must be allowed minimal lock updates (run #1 died
-# on exactly that). The lock still pins the base resolution.
+# Runtime lookup order: bundled TDLib dir first, then Termux's lib dir.
+export RUSTFLAGS="-C link-arg=-Wl,-rpath,$TERMUX_PREFIX/lib/tgt,-rpath,$TERMUX_PREFIX/lib"
+# NOTE: no --locked (run #1 lesson).
 cargo build --release --target aarch64-linux-android \
   --no-default-features --features "$FEATURES"
 
 BIN="$WORK/tgt/target/aarch64-linux-android/release/tgt"
 file "$BIN"
+readelf -d "$BIN" | grep -E "NEEDED|RUNPATH"
 cp "$BIN" "$DIST/tgt"
-echo "Built: $DIST/tgt"
+cp "$TD_INSTALL/lib/libtdjson.so" "$DIST/libtdjson.so"
+echo "Built: $DIST/tgt + $DIST/libtdjson.so"
