@@ -91,10 +91,13 @@ echo "== [4/5] pkg-config sysroot env"
 export PKG_CONFIG_ALLOW_CROSS=1
 export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
 export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
-export PKG_CONFIG_PATH_aarch64-linux-android="$TERMUX_USR/lib/pkgconfig"
-export PKG_CONFIG_SYSROOT_DIR_aarch64-linux-android="$SYSROOT"
-export PKG_CONFIG_PATH_x86_64-unknown-linux-gnu="$HOST_TERMUX_USR/lib/pkgconfig"
-export PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu="$HOST_SYSROOT"
+# (Underscore variant: bash cannot export names containing dashes, and the
+# pkg-config crate accepts PKG_CONFIG_PATH_<target_with_underscores> as an
+# equivalent form — run #5 died on exactly that bash identifier rule.)
+export PKG_CONFIG_PATH_aarch64_linux_android="$TERMUX_USR/lib/pkgconfig"
+export PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android="$SYSROOT"
+export PKG_CONFIG_PATH_x86_64_unknown_linux_gnu="$HOST_TERMUX_USR/lib/pkgconfig"
+export PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu="$HOST_SYSROOT"
 
 # TDLib version note (run #3): tdlib-rs at the pinned main commit demands
 # tdjson >= 1.8.61 via system-deps, but Termux packages libtd 1.8.50.
