@@ -7,7 +7,12 @@
 # sysroot; at runtime the phone resolves libtdjson.so from `pkg install libtd`.
 #
 # Env inputs:
-#   TGT_REF        upstream tag/commit to build   (default: v1.0.0)
+#   TGT_REF        upstream commit to build       (default: main @ 6b2abb9)
+#                  NOTE: the v1.0.0 TAG cannot build for Android — its
+#                  arboard clipboard dep is unconditional and arboard has
+#                  no Android backend. Upstream main target-gates arboard
+#                  out on Android (both the dep and its uses, with an
+#                  Android-specific copy path), so main is the port base.
 #   LIBTD_DEB_URL  pinned Termux libtd .deb URL   (default: libtd 1.8.50-1)
 #   ANDROID_NDK_HOME / NDK_HOME                   (required)
 #   API_LEVEL      Android API level for clang    (default: 24)
@@ -16,7 +21,7 @@
 #                  FEATURES=local-tdlib (uses LOCAL_TDLIB_PATH=$SYSROOT)
 set -euo pipefail
 
-TGT_REF="${TGT_REF:-v1.0.0}"
+TGT_REF="${TGT_REF:-6b2abb9354515023d3a90853f7d4cc95ba00ce6e}"
 LIBTD_DEB_URL="${LIBTD_DEB_URL:-https://packages-cf.termux.dev/apt/termux-main/pool/main/libt/libtd/libtd_1.8.50-1_aarch64.deb}"
 API_LEVEL="${API_LEVEL:-24}"
 FEATURES="${FEATURES:-pkg-config}"
@@ -31,8 +36,13 @@ mkdir -p "$WORK" "$DIST"
 
 echo "== [1/5] Clone tgt @ $TGT_REF"
 if [ ! -d "$WORK/tgt/.git" ]; then
-  git clone --depth 1 --branch "$TGT_REF" https://github.com/FedericoBruzzone/tgt.git "$WORK/tgt"
+  mkdir -p "$WORK/tgt"
+  git -C "$WORK/tgt" init -q
+  git -C "$WORK/tgt" remote add origin https://github.com/FedericoBruzzone/tgt.git
+  git -C "$WORK/tgt" fetch -q --depth 1 origin "$TGT_REF"
+  git -C "$WORK/tgt" checkout -q FETCH_HEAD
 fi
+git -C "$WORK/tgt" rev-parse HEAD
 
 echo "== [2/5] Fetch Termux libtd (sysroot)"
 if [ ! -f "$TERMUX_USR/lib/libtdjson.so" ]; then
