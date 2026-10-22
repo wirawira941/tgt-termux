@@ -68,7 +68,10 @@ echo "== [5/5] cargo build (features: $FEATURES)"
 cd "$WORK/tgt"
 # Runtime lookup: Termux keeps its libs in $PREFIX/lib; embed that rpath.
 export RUSTFLAGS="-C link-arg=-Wl,-rpath,/data/data/com.termux/files/usr/lib"
-cargo build --release --locked --target aarch64-linux-android \
+# NOTE: no --locked — the v1.0.0 tag's Cargo.lock does not cover this
+# feature set, so cargo must be allowed minimal lock updates (run #1 died
+# on exactly that). The lock still pins the base resolution.
+cargo build --release --target aarch64-linux-android \
   --no-default-features --features "$FEATURES"
 
 BIN="$WORK/tgt/target/aarch64-linux-android/release/tgt"
