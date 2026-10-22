@@ -5,7 +5,8 @@
 #   1. Installs Termux's TDLib package (libtd) — tgt links to it dynamically.
 #   2. Installs the tgt binary (from this folder if present, else downloaded
 #      from the GitHub release) into $PREFIX/bin.
-#   3. Smoke-tests with `tgt --help`.
+#   3. Creates ~/.tgt (tgt v1.0.0 panics at startup if it does not exist).
+#   4. Smoke-tests with `tgt --help`.
 #
 # Env:
 #   TGT_TAG   release tag to download (default: v1.0.0-termux.2)
@@ -38,6 +39,9 @@ fi
 echo "-- Installing binary to $PREFIX/bin/tgt"
 install -m 0755 "$WORK/tgt" "$PREFIX/bin/tgt"
 
+echo "-- Creating tgt home directory (~/.tgt)"
+mkdir -p "$HOME/.tgt"
+
 echo "-- Smoke test"
 "$PREFIX/bin/tgt" --help >/dev/null && echo "tgt --help: OK"
 
@@ -48,5 +52,5 @@ Done. First run:
   2. Run:  tgt
      and follow the first-run prompts (phone number + login code from Telegram).
 
-Config lives in ~/.config/tgt (see upstream CONFIG.md). Enjoy!
+Config lives in ~/.tgt/config. Enjoy!
 EOF
