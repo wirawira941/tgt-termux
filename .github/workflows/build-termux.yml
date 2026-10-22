@@ -8,6 +8,11 @@ on:
         required: false
         default: ""
 
+# Creating a Release needs contents:write; without this block the
+# GITHUB_TOKEN is read-only and softprops fails with 403 (run #7).
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
