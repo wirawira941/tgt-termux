@@ -82,6 +82,14 @@ ls -la "$DEPS_USR/lib/libssl.so" "$DEPS_USR/lib/libz.so" "$DEPS_USR/include/open
 
 echo "== [3/6] Build TDLib $TD_VERSION for aarch64 (target: tdjson)"
 if [ ! -f "$TD_INSTALL/lib/libtdjson.so" ]; then
+  # Cross-compiling TDLib requires its code generators to run on the HOST
+  # first: they emit the *-auto sources into the source tree (run #10 died
+  # with "No rule to make target tdutils/generate/auto/mime_type_to_extension.cpp"
+  # because this stage was missing). TDLib provides the aggregate target.
+  echo "-- Native prepare_cross_compiling (host code generators)"
+  cmake -S "$TD_SRC" -B "$WORK/td-build-native" -DCMAKE_BUILD_TYPE=Release
+  cmake --build "$WORK/td-build-native" --target prepare_cross_compiling -j "$JOBS"
+  ls -la "$TD_SRC/tdutils/generate/auto/mime_type_to_extension.cpp"
   cmake -S "$TD_SRC" -B "$TD_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${API_LEVEL}" \
