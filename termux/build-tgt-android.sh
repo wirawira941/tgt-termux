@@ -7,12 +7,20 @@
 # sysroot; at runtime the phone resolves libtdjson.so from `pkg install libtd`.
 #
 # Env inputs:
-#   TGT_REF        upstream commit to build       (default: main @ 6b2abb9)
-#                  NOTE: the v1.0.0 TAG cannot build for Android — its
-#                  arboard clipboard dep is unconditional and arboard has
-#                  no Android backend. Upstream main target-gates arboard
-#                  out on Android (both the dep and its uses, with an
-#                  Android-specific copy path), so main is the port base.
+#   TGT_REF        upstream commit to build       (default: v1.0.0 tag)
+#                  PIN RATIONALE (revised after the .1 on-device panic):
+#                  tdlib-rs' generated types must not be NEWER than the
+#                  runtime TDLib. tdlib-rs 1.3.0/1.4.0 (upstream main) are
+#                  generated from the TDLib 1.8.61 scheme; Termux ships
+#                  TDLib 1.8.50, whose replies omit newer required fields
+#                  (e.g. `collectible_usernames`) -> tgt panicked at
+#                  runtime deserializing them. The v1.0.0 tag uses
+#                  tdlib-rs 1.0.5 (TDLib 1.8.29 scheme <= 1.8.50 runtime:
+#                  the safe direction — unknown newer fields are ignored).
+#                  The tag's only Android blocker is its unconditional
+#                  arboard dep (no Android backend); termux/patches/
+#                  0001-android-termux-clipboard.patch target-gates it
+#                  out and routes copy/paste through Termux:API instead.
 #   LIBTD_DEB_URL  pinned Termux libtd .deb URL   (default: libtd 1.8.50-1)
 #   ANDROID_NDK_HOME / NDK_HOME                   (required)
 #   API_LEVEL      Android API level for clang    (default: 24)
@@ -21,7 +29,7 @@
 #                  FEATURES=local-tdlib (uses LOCAL_TDLIB_PATH=$SYSROOT)
 set -euo pipefail
 
-TGT_REF="${TGT_REF:-6b2abb9354515023d3a90853f7d4cc95ba00ce6e}"
+TGT_REF="${TGT_REF:-9ae9cb6c5788976b8db9e797045b90ffb1ee6d1e}"
 LIBTD_DEB_URL="${LIBTD_DEB_URL:-https://packages-cf.termux.dev/apt/termux-main/pool/main/libt/libtd/libtd_1.8.50-1_aarch64.deb}"
 HOST_LIBTD_DEB_URL="${HOST_LIBTD_DEB_URL:-https://packages-cf.termux.dev/apt/termux-main/pool/main/libt/libtd/libtd_1.8.50-1_x86_64.deb}"
 API_LEVEL="${API_LEVEL:-24}"
@@ -45,6 +53,18 @@ if [ ! -d "$WORK/tgt/.git" ]; then
   git -C "$WORK/tgt" checkout -q FETCH_HEAD
 fi
 git -C "$WORK/tgt" rev-parse HEAD
+
+# Android clipboard patch (see header): gate arboard out on Android and
+# route copy/paste through Termux:API (termux-clipboard-set/get).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLIP_PATCH="$SCRIPT_DIR/patches/0001-android-termux-clipboard.patch"
+if git -C "$WORK/tgt" apply --check "$CLIP_PATCH" 2>/dev/null; then
+  git -C "$WORK/tgt" apply "$CLIP_PATCH"
+  echo "Applied Android clipboard patch"
+else
+  echo "Clipboard patch already applied (or tree dirty); continuing"
+fi
+grep -n "termux_clipboard_set" "$WORK/tgt/src/components/chat_window.rs" | head -2
 
 echo "== [2/5] Fetch Termux libtd (sysroot)"
 if [ ! -f "$TERMUX_USR/lib/libtdjson.so" ]; then
@@ -99,12 +119,11 @@ export PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android="$SYSROOT"
 export PKG_CONFIG_PATH_x86_64_unknown_linux_gnu="$HOST_TERMUX_USR/lib/pkgconfig"
 export PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu="$HOST_SYSROOT"
 
-# TDLib version note (run #3): tdlib-rs at the pinned main commit demands
-# tdjson >= 1.8.61 via system-deps, but Termux packages libtd 1.8.50.
-# The td_json_client C API is stable across 1.8.x, so we satisfy the probe
-# by reporting the required version in both sysroots' tdjson.pc.
-# If the final link ever fails on missing symbols, revisit this first.
-sed -i 's/^Version: .*/Version: 1.8.61/' "$TERMUX_USR/lib/pkgconfig/tdjson.pc" "$HOST_TERMUX_USR/lib/pkgconfig/tdjson.pc"
+# TDLib version note: tdlib-rs 1.0.5 (v1.0.0 tag) probes tdjson >= 1.8.29,
+# which Termux's real 1.8.50 satisfies — NO version faking. (The .1 build
+# faked 1.8.61 for main's tdlib-rs 1.4.0; the C API linked fine, but its
+# 1.8.61-scheme types panicked at runtime against the 1.8.50 library.
+# Never fake the .pc version again; match the scheme instead.)
 grep '^Version:' "$TERMUX_USR/lib/pkgconfig/tdjson.pc" "$HOST_TERMUX_USR/lib/pkgconfig/tdjson.pc"
 # Fallback feature path (FEATURES=local-tdlib)
 export LOCAL_TDLIB_PATH="$TERMUX_USR"

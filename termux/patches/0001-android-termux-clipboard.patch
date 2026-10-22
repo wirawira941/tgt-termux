@@ -1,0 +1,167 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index d41fbd6..259451c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -54,13 +54,15 @@ tracing = "0.1.40"
+ tracing-error = "0.2.0"
+ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "chrono"] }
+ tracing-appender = "0.2"
+-arboard = { version = "3.4.0", features = ["wayland-data-control", "wl-clipboard-rs"] }
+ chrono = "0.4.38"
+ ratatui-image = "1.0.5"
+ image = "0.25.2"
+ signal-hook = "0.3.17"
+ clap = { version = "4.5.13", features = ["derive"] }
+ 
++[target.'cfg(not(target_os = "android"))'.dependencies]
++arboard = { version = "3.4.0", features = ["wayland-data-control", "wl-clipboard-rs"] }
++
+ [build-dependencies]
+ dirs = "5.0.1"
+ reqwest = { version = "0.12.4", features = ["blocking"] }
+diff --git a/src/components/chat_window.rs b/src/components/chat_window.rs
+index 3f33640..2d05ca9 100644
+--- a/src/components/chat_window.rs
++++ b/src/components/chat_window.rs
+@@ -5,7 +5,27 @@ use crate::{
+     event::Event,
+     tg::message_entry::MessageEntry,
+ };
++#[cfg(not(target_os = "android"))]
+ use arboard::Clipboard;
++
++/// Set the clipboard text on Android through the Termux:API command
++/// `termux-clipboard-set`. Best effort: silently does nothing when
++/// Termux:API is not installed.
++#[cfg(target_os = "android")]
++fn termux_clipboard_set(text: &str) {
++    use std::io::Write;
++    if let Ok(mut child) = std::process::Command::new("termux-clipboard-set")
++        .stdin(std::process::Stdio::piped())
++        .stdout(std::process::Stdio::null())
++        .stderr(std::process::Stdio::null())
++        .spawn()
++    {
++        if let Some(mut stdin) = child.stdin.take() {
++            let _ = stdin.write_all(text.as_bytes());
++        }
++        let _ = child.wait();
++    }
++}
+ use ratatui::{
+     layout::{Alignment, Constraint, Direction, Layout, Rect},
+     symbols::{
+@@ -141,9 +161,12 @@ impl ChatWindow {
+     fn copy_selected(&self) {
+         if let Some(selected) = self.message_list_state.selected() {
+             let message = self.message_list[selected].message_content_to_string();
++            #[cfg(not(target_os = "android"))]
+             if let Ok(mut clipboard) = Clipboard::new() {
+-                clipboard.set_text(message).unwrap();
++                let _ = clipboard.set_text(message);
+             }
++            #[cfg(target_os = "android")]
++            termux_clipboard_set(&message);
+         }
+     }
+ 
+diff --git a/src/components/prompt_window.rs b/src/components/prompt_window.rs
+index 677a030..e43ca48 100755
+--- a/src/components/prompt_window.rs
++++ b/src/components/prompt_window.rs
+@@ -6,7 +6,43 @@ use crate::{
+     event::Event,
+     tg::td_enums::TdMessageReplyToMessage,
+ };
++#[cfg(not(target_os = "android"))]
+ use arboard::Clipboard;
++
++/// Set the clipboard text on Android through the Termux:API command
++/// `termux-clipboard-set`. Best effort: silently does nothing when
++/// Termux:API is not installed.
++#[cfg(target_os = "android")]
++fn termux_clipboard_set(text: &str) {
++    use std::io::Write;
++    if let Ok(mut child) = std::process::Command::new("termux-clipboard-set")
++        .stdin(std::process::Stdio::piped())
++        .stdout(std::process::Stdio::null())
++        .stderr(std::process::Stdio::null())
++        .spawn()
++    {
++        if let Some(mut stdin) = child.stdin.take() {
++            let _ = stdin.write_all(text.as_bytes());
++        }
++        let _ = child.wait();
++    }
++}
++
++/// Read the clipboard text on Android through the Termux:API command
++/// `termux-clipboard-get`. Returns None when Termux:API is missing or
++/// the clipboard cannot be read.
++#[cfg(target_os = "android")]
++fn termux_clipboard_get() -> Option<String> {
++    let out = std::process::Command::new("termux-clipboard-get")
++        .output()
++        .ok()?;
++    if out.status.success() {
++        let text = String::from_utf8_lossy(&out.stdout).into_owned();
++        Some(text.trim_end_matches(['\r', '\n']).to_string())
++    } else {
++        None
++    }
++}
+ use crossterm::event::KeyCode;
+ use ratatui::{
+     layout::Rect,
+@@ -400,20 +436,23 @@ impl Input {
+     /// Copy the selected text of the `Input` struct.
+     /// The selected text is copied to the clipboard.
+     fn copy_selected(&self) {
+-        if let Ok(mut clipboard) = Clipboard::new() {
+-            let mut text = String::new();
+-            for (i, line) in self.text.iter().enumerate() {
+-                for cell in line {
+-                    if cell.selected {
+-                        text.push(cell.c);
+-                    }
+-                }
+-                if i < self.text.len() - 1 {
+-                    text.push('\n');
++        let mut text = String::new();
++        for (i, line) in self.text.iter().enumerate() {
++            for cell in line {
++                if cell.selected {
++                    text.push(cell.c);
+                 }
+             }
+-            clipboard.set_text(text).unwrap();
++            if i < self.text.len() - 1 {
++                text.push('\n');
++            }
+         }
++        #[cfg(not(target_os = "android"))]
++        if let Ok(mut clipboard) = Clipboard::new() {
++            let _ = clipboard.set_text(text);
++        }
++        #[cfg(target_os = "android")]
++        termux_clipboard_set(&text);
+     }
+     /// Paste text into the `Input` struct.
+     /// The text is pasted at the current cursor position.
+@@ -703,11 +742,16 @@ impl Component for PromptWindow {
+                 }
+ 
+                 (KeyCode::Char('v'), Modifiers { control: true, .. }) => {
++                    #[cfg(not(target_os = "android"))]
+                     if let Ok(mut clipboard) = Clipboard::new() {
+                         if let Ok(text) = clipboard.get_text() {
+                             self.input.paste(text);
+                         }
+                     }
++                    #[cfg(target_os = "android")]
++                    if let Some(text) = termux_clipboard_get() {
++                        self.input.paste(text);
++                    }
+                 }
+ 
+                 (KeyCode::Left | KeyCode::Char('b'), Modifiers { alt: true, .. }) => {

@@ -8,10 +8,10 @@
 #   3. Smoke-tests with `tgt --help`.
 #
 # Env:
-#   TGT_TAG   release tag to download (default: v1.0.0-termux.1)
+#   TGT_TAG   release tag to download (default: v1.0.0-termux.2)
 set -euo pipefail
 
-TGT_TAG="${TGT_TAG:-v1.0.0-termux.1}"
+TGT_TAG="${TGT_TAG:-v1.0.0-termux.2}"
 REPO="wirawira941/tgt-termux"
 ASSET="tgt-termux-android-aarch64.zip"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
