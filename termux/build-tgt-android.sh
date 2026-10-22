@@ -99,7 +99,11 @@ if [ ! -f "$TD_INSTALL/lib/libtdjson.so" ]; then
     -DOPENSSL_ROOT_DIR="$DEPS_USR" -DOPENSSL_INCLUDE_DIR="$DEPS_USR/include" \
     -DOPENSSL_SSL_LIBRARY="$DEPS_USR/lib/libssl.so" -DOPENSSL_CRYPTO_LIBRARY="$DEPS_USR/lib/libcrypto.so" \
     -DZLIB_INCLUDE_DIR="$DEPS_USR/include" -DZLIB_LIBRARY="$DEPS_USR/lib/libz.so"
-  cmake --build "$TD_BUILD" --target tdjson -j "$JOBS"
+  # Build BOTH tdjson (shared) and tdjson_static: TDLib's install step
+  # installs both, and bare `cmake --install` fails with
+  # "cannot find libtdjson_static.a" if the static target was never built
+  # (run #11 died exactly there, AFTER libtdjson.so itself was built fine).
+  cmake --build "$TD_BUILD" --target tdjson tdjson_static -j "$JOBS"
   cmake --install "$TD_BUILD"
 fi
 ls -la "$TD_INSTALL/lib/libtdjson.so" "$TD_INSTALL/include/td/telegram/td_json_client.h"
