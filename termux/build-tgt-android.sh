@@ -105,6 +105,13 @@ if [ ! -f "$TD_INSTALL/lib/libtdjson.so" ]; then
   # (run #11 died exactly there, AFTER libtdjson.so itself was built fine).
   cmake --build "$TD_BUILD" --target tdjson tdjson_static -j "$JOBS"
   cmake --install "$TD_BUILD"
+  # The bundled libtdjson.so must find its own deps (libssl.so.3 & friends in
+  # $PREFIX/lib) WITHOUT any help: TDLib ships it with no RUNPATH, the
+  # executable's RUNPATH is not transitive, and LD_LIBRARY_PATH would shadow
+  # the bundled lib with Termux's old libtd (all three seen on-device with
+  # release .3). Give the library its own RUNPATH.
+  patchelf --set-rpath "$TERMUX_PREFIX/lib" "$TD_INSTALL/lib/libtdjson.so"
+  readelf -d "$TD_INSTALL/lib/libtdjson.so" | grep "RUNPATH"
 fi
 ls -la "$TD_INSTALL/lib/libtdjson.so" "$TD_INSTALL/include/td/telegram/td_json_client.h"
 readelf -d "$TD_INSTALL/lib/libtdjson.so" | grep NEEDED || true

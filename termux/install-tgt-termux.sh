@@ -16,10 +16,10 @@
 #      `tgt init-config` (only when no config exists yet).
 #
 # Env:
-#   TGT_TAG   release tag to download (default: v1.0.0-termux.3)
+#   TGT_TAG   release tag to download (default: v1.0.0-termux.4)
 set -euo pipefail
 
-TGT_TAG="${TGT_TAG:-v1.0.0-termux.3}"
+TGT_TAG="${TGT_TAG:-v1.0.0-termux.4}"
 REPO="wirawira941/tgt-termux"
 ASSET="tgt-termux-android-aarch64.zip"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
