@@ -42,6 +42,16 @@ install -m 0755 "$WORK/tgt" "$PREFIX/bin/tgt"
 echo "-- Creating tgt home directory (~/.tgt)"
 mkdir -p "$HOME/.tgt"
 
+echo "-- Seeding default config into ~/.tgt/config (existing files are kept)"
+mkdir -p "$HOME/.tgt/config"
+CFG_BASE="https://raw.githubusercontent.com/FedericoBruzzone/tgt/v1.0.0/config"
+for f in app.toml keymap.toml logger.toml telegram.toml theme.toml; do
+  if [ ! -f "$HOME/.tgt/config/$f" ]; then
+    curl -sfL -o "$HOME/.tgt/config/$f" "$CFG_BASE/$f" \
+      || { echo "ERROR: failed to download default config $f"; exit 1; }
+  fi
+done
+
 echo "-- Smoke test"
 "$PREFIX/bin/tgt" --help >/dev/null && echo "tgt --help: OK"
 
@@ -49,7 +59,9 @@ cat <<'EOF'
 
 Done. First run:
   1. Get your own API ID and API hash at https://my.telegram.org (API development tools).
-  2. Run:  tgt
+  2. Put them into ~/.tgt/config/telegram.toml (api_id / api_hash) — the
+     seeded file only contains upstream's public demo values.
+  3. Run:  tgt
      and follow the first-run prompts (phone number + login code from Telegram).
 
 Config lives in ~/.tgt/config. Enjoy!
