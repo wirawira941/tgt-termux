@@ -1,0 +1,67 @@
+name: build-termux
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish (leave empty for artifact only)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout port repo
+        uses: actions/checkout@v4
+        with:
+          path: port
+
+      - name: Install Rust (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Download Android NDK r28c
+        run: |
+          cd "$HOME"
+          curl -sL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r28c-linux.zip
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r28c" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/tgt-build/tgt/target
+          key: tgt-termux-${{ hashFiles('port/termux/build-tgt-android.sh') }}-v1
+
+      - name: Build tgt for Android aarch64
+        run: bash port/termux/build-tgt-android.sh
+        env:
+          DIST: ${{ github.workspace }}/dist
+
+      - name: Package
+        run: |
+          cd dist
+          cp "$GITHUB_WORKSPACE/port/termux/install-tgt-termux.sh" .
+          chmod +x tgt install-tgt-termux.sh
+          zip -9 tgt-termux-android-aarch64.zip tgt install-tgt-termux.sh
+          ls -la
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tgt-termux-android-aarch64
+          path: dist/tgt-termux-android-aarch64.zip
+          retention-days: 90
+
+      - name: Publish release
+        if: inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: dist/tgt-termux-android-aarch64.zip
