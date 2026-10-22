@@ -16,7 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 300
     steps:
       - name: Checkout port repo
         uses: actions/checkout@v4
@@ -35,6 +35,11 @@ jobs:
           unzip -q ndk.zip
           echo "ANDROID_NDK_HOME=$HOME/android-ndk-r28c" >> "$GITHUB_ENV"
 
+      - name: Install host build tools (gperf for TDLib)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gperf
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -43,6 +48,14 @@ jobs:
             ~/.cargo/git
             ~/tgt-build/tgt/target
           key: tgt-termux-${{ hashFiles('port/termux/build-tgt-android.sh') }}-v1
+
+      - name: Cache TDLib build (1.8.61)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/tgt-build/td-build-android
+            ~/tgt-build/td-install
+          key: tdlib-1.8.61-11e254af-v1
 
       - name: Build tgt for Android aarch64
         run: bash port/termux/build-tgt-android.sh
@@ -54,7 +67,8 @@ jobs:
           cd dist
           cp "$GITHUB_WORKSPACE/port/termux/install-tgt-termux.sh" .
           chmod +x tgt install-tgt-termux.sh
-          zip -9 tgt-termux-android-aarch64.zip tgt install-tgt-termux.sh
+          chmod 755 libtdjson.so
+          zip -9 tgt-termux-android-aarch64.zip tgt libtdjson.so install-tgt-termux.sh
           ls -la
 
       - name: Upload artifact
