@@ -111,8 +111,11 @@ if [ ! -f "$TD_INSTALL/lib/libtdjson.so" ]; then
   # the bundled lib with Termux's old libtd (all three seen on-device with
   # release .3). Give the library its own RUNPATH.
   patchelf --set-rpath "$TERMUX_PREFIX/lib" "$TD_INSTALL/lib/libtdjson.so"
-  readelf -d "$TD_INSTALL/lib/libtdjson.so" | grep "RUNPATH"
 fi
+# patchelf is idempotent, so this runs on every invocation — including runs
+# where the TDLib cache hit and the stage above was skipped (release .4
+# taught us the hard way: a patchelf hidden inside the cache-if never runs).
+readelf -d "$TD_INSTALL/lib/libtdjson.so" | grep "RUNPATH"
 ls -la "$TD_INSTALL/lib/libtdjson.so" "$TD_INSTALL/include/td/telegram/td_json_client.h"
 readelf -d "$TD_INSTALL/lib/libtdjson.so" | grep NEEDED || true
 
